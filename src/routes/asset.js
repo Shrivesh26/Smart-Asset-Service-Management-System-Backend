@@ -10,6 +10,7 @@ router.use(protect);
 router.post('/uploads', upload.single('image'), assetController.uploadAssetImage);
 
 router.post('/', authorize('tenant'), assetController.createAsset);
+router.get('/stats/overview', assetController.getAssetStats);
 
 // All authenticated users can view assets (with tenant isolation in controller)
 router.get('/', assetController.getAssets);
