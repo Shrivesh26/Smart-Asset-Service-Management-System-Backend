@@ -355,3 +355,41 @@ Example test flow:
 ## License
 
 This project is licensed under the ISC License.
+### Asset Management
+
+#### Create Asset
+```http
+POST /api/v1/assets
+Authorization: Bearer <tenant-token>
+Content-Type: application/json
+
+{
+  "name": "Dell Latitude 7440",
+  "description": "Developer laptop",
+  "category": "IT Equipment",
+  "location": "Main Office",
+  "status": "Active",
+  "condition": "Excellent",
+  "value": 1800,
+  "purchaseDate": "2025-01-02",
+  "lastMaintenanceDate": "2025-03-01",
+  "nextMaintenanceDate": "2025-09-01",
+  "serialNumber": "DL7440-1001",
+  "assetTag": "LAP-001",
+  "manufacturer": "Dell",
+  "model": "Latitude 7440"
+}
+```
+
+#### List Assets (with filters + pagination)
+```http
+GET /api/v1/assets?page=1&limit=20&search=dell&status=Active&maintenanceDue=true&sortBy=createdAt&sortOrder=desc
+Authorization: Bearer <token>
+```
+
+#### Asset Dashboard Metrics
+```http
+GET /api/v1/assets/stats/overview
+Authorization: Bearer <token>
+```
+Returns total asset count, total portfolio value, maintenance due count, and status/category breakdown.

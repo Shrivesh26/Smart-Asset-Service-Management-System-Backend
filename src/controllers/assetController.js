@@ -1,5 +1,15 @@
 const Asset = require('../models/Asset');
 
+const getTenantIdFromRequest = (req) => {
+  if (req.user.role === 'admin') {
+    return req.query.tenant || null;
+  }
+
+  return req.tenantId || req.user.tenant?._id || req.user.tenant || req.user._id;
+};
+
+const generateAssetTag = () => `AST-${Date.now().toString().slice(-8)}`;
+
 // ✅ ADD IMAGE UPLOAD HANDLER
 exports.uploadAssetImage = async (req, res) => {
   try {
@@ -63,7 +73,15 @@ exports.createAsset = async (req, res) => {
       });
     }
 
-    // ✅ ENSURE ASSET BELONGS TO THE TENANT
+    const tenantId = getTenantIdFromRequest(req);
+
+    if (!tenantId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Unable to resolve tenant context for asset creation'
+      });
+    }
+
     const assetData = {
       name: name.trim(),
       description: description.trim(),
@@ -74,10 +92,17 @@ exports.createAsset = async (req, res) => {
       purchaseDate: purchaseDate ? new Date(purchaseDate) : new Date(),
       lastMaintenanceDate: lastMaintenanceDate ? new Date(lastMaintenanceDate) : new Date(),
       serialNumber: serialNumber.trim(),
+      assetTag: req.body.assetTag || generateAssetTag(),
       manufacturer: manufacturer.trim(),
       model: model.trim(),
+      condition: req.body.condition,
+      warrantyExpiryDate: req.body.warrantyExpiryDate ? new Date(req.body.warrantyExpiryDate) : undefined,
+      assignedTo: req.body.assignedTo,
+      nextMaintenanceDate: req.body.nextMaintenanceDate ? new Date(req.body.nextMaintenanceDate) : undefined,
       imageUrl: imageUrl || null, // ✅ Include image URL
-      tenant: req.user._id 
+      tenant: tenantId,
+      createdBy: req.user._id,
+      updatedBy: req.user._id
     };
 
     const asset = await Asset.create(assetData);
@@ -97,29 +122,52 @@ exports.createAsset = async (req, res) => {
 exports.getAssets = async (req, res) => {
   try {
     const query = {};
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+    const skip = (page - 1) * limit;
+    const sortBy = req.query.sortBy || 'createdAt';
+    const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
+    const tenantId = getTenantIdFromRequest(req);
     
     // ✅ TENANT ISOLATION
-    if (req.user.role === 'tenant') {
-      query.tenant = req.user._id;
-    } else if (req.user.role === 'service_provider' || req.user.role === 'customer') {
-      query.tenant = req.user.tenant;
+    if (tenantId) {
+      query.tenant = tenantId;
     }
-    // Admin can see all assets
     
     if (req.query.category) query.category = req.query.category;
     if (req.query.location) query.location = req.query.location;
     if (req.query.status) query.status = req.query.status;
+    if (req.query.condition) query.condition = req.query.condition;
+    if (req.query.assignedTo) query.assignedTo = req.query.assignedTo;
+    if (req.query.maintenanceDue === 'true') {
+      query.nextMaintenanceDate = { $lte: new Date() };
+    }
     if (req.query.search)
       query.$or = [
         { name: { $regex: req.query.search, $options: 'i' } },
         { description: { $regex: req.query.search, $options: 'i' } },
+        { serialNumber: { $regex: req.query.search, $options: 'i' } },
+        { assetTag: { $regex: req.query.search, $options: 'i' } }
       ];
-      
-    const assets = await Asset.find(query).sort({ createdAt: -1 });
+
+    const [assets, total] = await Promise.all([
+      Asset.find(query)
+        .sort({ [sortBy]: sortOrder })
+        .skip(skip)
+        .limit(limit)
+        .populate('assignedTo', 'firstName lastName email'),
+      Asset.countDocuments(query)
+    ]);
     
     res.json({ 
       success: true, // ✅ Add success field
-      assets 
+      assets,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit)
+      }
     });
   } catch (err) {
     res.status(500).json({ 
@@ -133,15 +181,14 @@ exports.getAssets = async (req, res) => {
 exports.getAsset = async (req, res) => {
   try {
     const query = { _id: req.params.id };
+    const tenantId = getTenantIdFromRequest(req);
     
     // ✅ TENANT ISOLATION
-    if (req.user.role === 'tenant') {
-      query.tenant = req.user._id;
-    } else if (req.user.role === 'service_provider' || req.user.role === 'customer') {
-      query.tenant = req.user.tenant;
+    if (tenantId) {
+      query.tenant = tenantId;
     }
     
-    const asset = await Asset.findOne(query);
+    const asset = await Asset.findOne(query).populate('assignedTo', 'firstName lastName email');
     if (!asset) {
       return res.status(404).json({ 
         success: false,
@@ -174,6 +221,10 @@ exports.updateAsset = async (req, res) => {
 
     // ✅ SANITIZE UPDATE DATA
     const updateData = { ...req.body };
+    const tenantId = getTenantIdFromRequest(req);
+
+    delete updateData.tenant;
+    delete updateData.createdBy;
     
     // Convert dates if provided
     if (updateData.purchaseDate) {
@@ -188,8 +239,17 @@ exports.updateAsset = async (req, res) => {
       updateData.value = parseFloat(updateData.value);
     }
 
+    if (updateData.warrantyExpiryDate) {
+      updateData.warrantyExpiryDate = new Date(updateData.warrantyExpiryDate);
+    }
+    if (updateData.nextMaintenanceDate) {
+      updateData.nextMaintenanceDate = new Date(updateData.nextMaintenanceDate);
+    }
+
+    updateData.updatedBy = req.user._id;
+
     const asset = await Asset.findOneAndUpdate(
-      { _id: req.params.id, tenant: req.user._id },
+      { _id: req.params.id, tenant: tenantId },
       updateData, 
       { new: true, runValidators: true }
     );
@@ -224,9 +284,10 @@ exports.deleteAsset = async (req, res) => {
       });
     }
 
+    const tenantId = getTenantIdFromRequest(req);
     const asset = await Asset.findOneAndDelete({
       _id: req.params.id, 
-      tenant: req.user._id
+      tenant: tenantId
     });
     
     if (!asset) {
@@ -244,6 +305,56 @@ exports.deleteAsset = async (req, res) => {
     res.status(500).json({ 
       success: false,
       message: err.message 
+    });
+  }
+};
+
+// Get asset dashboard metrics
+exports.getAssetStats = async (req, res) => {
+  try {
+    const tenantId = getTenantIdFromRequest(req);
+    const match = tenantId ? { tenant: tenantId } : {};
+
+    const [statusBreakdown, categoryBreakdown, totals] = await Promise.all([
+      Asset.aggregate([
+        { $match: match },
+        { $group: { _id: '$status', count: { $sum: 1 } } }
+      ]),
+      Asset.aggregate([
+        { $match: match },
+        { $group: { _id: '$category', count: { $sum: 1 } } }
+      ]),
+      Asset.aggregate([
+        { $match: match },
+        {
+          $group: {
+            _id: null,
+            totalAssets: { $sum: 1 },
+            totalValue: { $sum: '$value' }
+          }
+        }
+      ])
+    ]);
+
+    const maintenanceDue = await Asset.countDocuments({
+      ...match,
+      nextMaintenanceDate: { $lte: new Date() }
+    });
+
+    res.json({
+      success: true,
+      data: {
+        totalAssets: totals[0]?.totalAssets || 0,
+        totalValue: totals[0]?.totalValue || 0,
+        maintenanceDue,
+        statusBreakdown,
+        categoryBreakdown
+      }
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      message: err.message
     });
   }
 };

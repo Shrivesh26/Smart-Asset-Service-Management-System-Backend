@@ -1,6 +1,12 @@
 const mongoose = require('mongoose');
 
 const assetSchema = new mongoose.Schema({
+  tenant: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Tenant',
+    required: true,
+    index: true
+  },
   name: {
     type: String,
     required: [true, 'Asset name is required'],
@@ -64,8 +70,13 @@ const assetSchema = new mongoose.Schema({
     type: String,
     required: [true, 'Serial number is required'],
     trim: true,
-    unique: true,
     maxlength: [100, 'Serial number cannot exceed 100 characters']
+  },
+  assetTag: {
+    type: String,
+    trim: true,
+    uppercase: true,
+    maxlength: [50, 'Asset tag cannot exceed 50 characters']
   },
   manufacturer: {
     type: String,
@@ -79,6 +90,35 @@ const assetSchema = new mongoose.Schema({
     trim: true,
     maxlength: [100, 'Model name cannot exceed 100 characters']
   },
+  condition: {
+    type: String,
+    enum: ['Excellent', 'Good', 'Fair', 'Poor'],
+    default: 'Good'
+  },
+  warrantyExpiryDate: {
+    type: Date,
+    validate: {
+      validator: function (value) {
+        if (!value || !this.purchaseDate) return true;
+        return value >= this.purchaseDate;
+      },
+      message: 'Warranty expiry date cannot be before purchase date'
+    }
+  },
+  assignedTo: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  nextMaintenanceDate: {
+    type: Date,
+    validate: {
+      validator: function (value) {
+        if (!value || !this.purchaseDate) return true;
+        return value >= this.purchaseDate;
+      },
+      message: 'Next maintenance date cannot be before purchase date'
+    }
+  },
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
@@ -87,19 +127,16 @@ const assetSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
   },
-    tenant: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Tenant',
-    required: true
-  },
 }, {
   timestamps: true
 });
 
 // Indexes
 assetSchema.index({ name: 1, category: 1 });
-assetSchema.index({ serialNumber: 1 }, { unique: true });
+assetSchema.index({ tenant: 1, serialNumber: 1 }, { unique: true });
+assetSchema.index({ tenant: 1, assetTag: 1 }, { unique: true, sparse: true });
 assetSchema.index({ location: 1 });
 assetSchema.index({ status: 1 });
+assetSchema.index({ tenant: 1, nextMaintenanceDate: 1 });
 
 module.exports = mongoose.model('Asset', assetSchema);
